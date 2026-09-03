@@ -46,6 +46,11 @@ def stats():
             cur.execute("SELECT count(*) FROM audit_log WHERE action LIKE '%_denied'")
             denied_count = cur.fetchone()[0]
 
+            cur.execute("SELECT count(*) FROM messages WHERE role = 'assistant'")
+            total_messages = cur.fetchone()[0]
+            cur.execute("SELECT count(*) FROM conversations")
+            total_conversations = cur.fetchone()[0]
+
             # --- Review queue ----------------------------------------------
             cur.execute("SELECT status, count(*) FROM content_review_queue GROUP BY status")
             review_queue_by_status = [{"status": r[0], "count": r[1]} for r in cur.fetchall()]
@@ -96,6 +101,8 @@ def stats():
         "routing": {
             "distribution": route_distribution,
             "recent_messages": recent_messages,
+            "total_messages": total_messages,
+            "total_conversations": total_conversations,
         },
         "audit": {
             "recent": recent_audit,
