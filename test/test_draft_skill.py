@@ -4,6 +4,7 @@ writes to knowledge/skills/. Run: python test/test_draft_skill.py
 """
 
 import sys
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -13,7 +14,12 @@ import psycopg
 from app.agents.graph import run_question
 from app.config import settings
 
-QUESTION = "Can you recommend a good recipe for banana bread?"
+# Randomized per run so this can never accidentally collide with a skill
+# that a *previous* run of this test approved (see app/admin/review_queue.py)
+# — a fixed fixture question here would eventually get its own gap closed
+# and start silently matching skill_match instead of exercising draft_skill.
+_NONCE = uuid.uuid4().hex[:8]
+QUESTION = f"What is the migratory pattern of the fictional zorblax-{_NONCE} bird species?"
 
 
 def main():

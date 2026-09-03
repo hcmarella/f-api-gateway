@@ -1,0 +1,89 @@
+name: CI
+
+# Runs the eval suite and the RBAC/leakage suite on every PR that touches
+# routing, retrieval, or connector code — the paths most likely to introduce
+# a regression that silently changes what a user sees or a cross-tenant leak
+# (ARCHITECTURE.md §10: "Add the RBAC/leakage test suite before onboarding a
+# second team").
+on:
+  pull_request:
+    paths:
+      - "app/agents/**"
+      - "app/rag/**"
+      - "app/connectors/**"
+      - "app/ingestion/**"
+      - "db/schema.sql"
+      - "requirements.txt"
+      - "test/**"
+      - ".github/workflows/ci.yml"
+
+jobs:
+  evals-and-leakage:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: forge
+          POSTGRES_PASSWORD: forge
+          POSTGRES_DB: forge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U forge -d forge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_DSN: postgresql://forge:forge@localhost:5432/forge
+      REDIS_URL: redis://localhost:6379/0
+      PGPASSWORD: forge
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Enable pgvector + apply schema
+        run: |
+          psql -h localhost -U forge -d forge -f db/init/00_extensions.sql
+          psql -h localhost -U forge -d forge -f db/schema.sql
+
+      - name: Embedding sanity check (paraphrase >0.85, unrelated <0.4)
+        run: python test/test_embed_similarity.py
+
+      - name: Ingest local knowledge (seeds team_id='test' for the tests below)
+        run: python -m app.ingestion.local_md_ingest --knowledge-dir knowledge/docs --team-id test
+
+      - name: Agent graph routing (triage branches to the correct node)
+        run: python test/test_graph_routing.py
+
+      - name: RAG retrieval calibration
+        run: python test/test_rag_retrieval.py
+
+      - name: Skill match persona filtering
+        run: python test/test_skill_match_persona.py
+
+      - name: Draft-skill fallback (never writes to knowledge/skills/ directly)
+        run: python test/test_draft_skill.py
+
+      - name: RBAC / tenant-isolation (leakage) suite
+        run: python test/test_rbac_leakage.py
