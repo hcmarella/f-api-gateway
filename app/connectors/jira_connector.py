@@ -8,6 +8,7 @@ once credentials exist. The public interface (`get_sprint_status`) is what
 callers depend on and does not need to change when that happens.
 """
 
+import hashlib
 import logging
 import os
 import time
@@ -32,6 +33,28 @@ _MOCK_SPRINT_DATA = {
 }
 
 
+def _synthetic_sprint_data(team_id: str) -> dict:
+    """Deterministic-but-team-unique fake data for a team that isn't in
+    _MOCK_SPRINT_DATA. Never falls back to another team's real entry — that
+    would be a cross-tenant data leak, even in a mock. Same team_id always
+    produces the same numbers (useful for repeatable tests) without ever
+    matching another team's board/sprint identifiers."""
+    seed = int(hashlib.sha256(team_id.encode()).hexdigest()[:8], 16)
+    total = 10 + (seed % 20)
+    done = seed % (total + 1)
+    return {
+        "board_id": 1000 + (seed % 9000),
+        "sprint_id": 5000 + (seed % 5000),
+        "sprint_name": f"Sprint {1 + seed % 30}",
+        "issues_total": total,
+        "issues_done": done,
+        "issues_in_progress": (total - done) // 2,
+        "issues_todo": total - done - (total - done) // 2,
+        "story_points_committed": 20 + (seed % 60),
+        "story_points_completed": (20 + seed % 60) * done // max(total, 1),
+    }
+
+
 def _call_jira_api(team_id: str) -> dict:
     """Stand-in for GET {JIRA_BASE_URL}/rest/agile/1.0/board/{id}/sprint.
     Mocked because no live Jira credentials are configured in this
@@ -39,7 +62,9 @@ def _call_jira_api(team_id: str) -> dict:
     to confirm this path — not knowledge_chunks — was hit."""
     logger.info("jira_connector: calling live Jira API for team_id=%r (sprint board status)", team_id)
     time.sleep(0.05)  # simulate network latency of a real API call
-    return _MOCK_SPRINT_DATA.get(team_id, _MOCK_SPRINT_DATA["test"])
+    if team_id in _MOCK_SPRINT_DATA:
+        return _MOCK_SPRINT_DATA[team_id]
+    return _synthetic_sprint_data(team_id)
 
 
 def get_sprint_status(team_id: str) -> dict:
