@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>forge-api-gateway — Ops Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121821;
+    --panel-border: #232c38;
+    --text: #e6edf3;
+    --text-dim: #8b98a5;
+    --accent: #4fa3ff;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding: 24px;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  h1 span { color: var(--text-dim); font-weight: 400; }
+  #status { font-size: 12px; color: var(--text-dim); }
+  #status.error { color: var(--bad); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 16px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    margin: 0 0 12px 0;
+    font-weight: 600;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td {
+    text-align: left;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--panel-border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+  }
+  th { color: var(--text-dim); font-weight: 500; font-size: 11px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .stat-row { display: flex; justify-content: space-between; padding: 4px 0; }
+  .stat-row .label { color: var(--text-dim); }
+  .stat-row .value { font-weight: 600; }
+  .badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge.pending, .badge.running { background: rgba(210,153,34,0.18); color: var(--warn); }
+  .badge.approved, .badge.success { background: rgba(63,185,80,0.18); color: var(--good); }
+  .badge.rejected, .badge.failed { background: rgba(248,81,73,0.18); color: var(--bad); }
+  .badge.denied { background: rgba(248,81,73,0.18); color: var(--bad); }
+  .empty { color: var(--text-dim); font-style: italic; padding: 8px 0; }
+  .bar-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .bar-label { width: 110px; font-size: 12px; color: var(--text-dim); flex-shrink: 0; }
+  .bar-track { flex: 1; background: var(--panel-border); border-radius: 4px; height: 14px; overflow: hidden; }
+  .bar-fill { background: var(--accent); height: 100%; }
+  .bar-count { width: 32px; text-align: right; font-size: 12px; color: var(--text-dim); }
+  .kpi { display: flex; gap: 20px; margin-bottom: 12px; flex-wrap: wrap; }
+  .kpi div { text-align: center; }
+  .kpi .n { font-size: 22px; font-weight: 700; }
+  .kpi .l { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>forge-api-gateway <span>ops dashboard</span></h1>
+  <div id="status">loading…</div>
+</header>
+
+<div class="grid">
+
+  <div class="panel" id="panel-routing">
+    <h2>Routing distribution</h2>
+    <div id="route-bars"></div>
+  </div>
+
+  <div class="panel" id="panel-eval">
+    <h2>pgvector vs Neo4j (eval_case_log)</h2>
+    <div id="eval-table"></div>
+  </div>
+
+  <div class="panel" id="panel-review">
+    <h2>Review queue</h2>
+    <div id="review-kpi" class="kpi"></div>
+    <table><thead><tr><th>Team</th><th>Target</th><th>Status</th><th>Created</th></tr></thead><tbody id="review-rows"></tbody></table>
+  </div>
+
+  <div class="panel" id="panel-sync">
+    <h2>Ingestion / sync pipeline</h2>
+    <div id="sync-kpi" class="kpi"></div>
+    <table><thead><tr><th>Connector</th><th>Team</th><th>Status</th><th>Docs</th><th>Chunks</th><th>Started</th></tr></thead><tbody id="sync-rows"></tbody></table>
+  </div>
+
+  <div class="panel" id="panel-messages">
+    <h2>Recent chat activity</h2>
+    <table><thead><tr><th>Team</th><th>Route</th><th>Conf.</th><th>Answer</th><th>When</th></tr></thead><tbody id="message-rows"></tbody></table>
+  </div>
+
+  <div class="panel" id="panel-audit">
+    <h2>Audit log (incl. denials)</h2>
+    <div class="kpi"><div><div class="n" id="denied-count">–</div><div class="l">denied attempts</div></div></div>
+    <table><thead><tr><th>Actor</th><th>Action</th><th>Team</th><th>When</th></tr></thead><tbody id="audit-rows"></tbody></table>
+  </div>
+
+</div>
+
+<script>
+const POLL_MS = 15000;
+const statusEl = document.getElementById('status');
+
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const secs = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (secs < 60) return secs + 's ago';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+  return Math.floor(secs / 86400) + 'd ago';
+}
+
+function badge(text) {
+  return `<span class="badge ${esc(text)}">${esc(text)}</span>`;
+}
+
+function renderRouteBars(distribution) {
+  const el = document.getElementById('route-bars');
+  if (!distribution.length) { el.innerHTML = '<div class="empty">No chat activity yet</div>'; return; }
+  const max = Math.max(...distribution.map(d => d.count));
+  el.innerHTML = distribution.map(d => `
+    <div class="bar-wrap">
+      <div class="bar-label mono">${esc(d.route || 'null')}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${(d.count / max * 100).toFixed(0)}%"></div></div>
+      <div class="bar-count">${d.count}</div>
+    </div>
+  `).join('');
+}
+
+function renderEvalTable(rows) {
+  const el = document.getElementById('eval-table');
+  if (!rows.length) { el.innerHTML = '<div class="empty">No eval_case_log data yet — run test/graphdb_comparison.py</div>'; return; }
+  el.innerHTML = `<table>
+    <thead><tr><th>Engine</th><th>Avg confidence</th><th>Avg latency</th><th>Pass rate</th><th>n</th></tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td class="mono">${esc(r.engine)}</td>
+      <td>${r.avg_confidence ?? '–'}</td>
+      <td>${r.avg_latency_ms ?? '–'} ms</td>
+      <td>${r.pass_rate !== null ? (r.pass_rate * 100).toFixed(0) + '%' : '–'}</td>
+      <td>${r.n}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function renderReview(data) {
+  const kpi = document.getElementById('review-kpi');
+  kpi.innerHTML = data.by_status.map(s => `<div><div class="n">${s.count}</div><div class="l">${esc(s.status)}</div></div>`).join('')
+    || '<div class="empty">No review queue entries</div>';
+
+  const rows = document.getElementById('review-rows');
+  rows.innerHTML = data.recent.map(r => `<tr>
+    <td class="mono">${esc(r.team_id)}</td>
+    <td>${esc(r.target)}</td>
+    <td>${badge(r.status)}</td>
+    <td>${timeAgo(r.created_at)}</td>
+  </tr>`).join('') || '<tr><td colspan="4" class="empty">Nothing yet</td></tr>';
+}
+
+function renderSync(data) {
+  const kpi = document.getElementById('sync-kpi');
+  kpi.innerHTML = `
+    <div><div class="n">${data.total_chunks}</div><div class="l">total chunks</div></div>
+    ${data.chunks_by_team.map(t => `<div><div class="n">${t.count}</div><div class="l">${esc(t.team_id)}</div></div>`).join('')}
+  `;
+  const rows = document.getElementById('sync-rows');
+  rows.innerHTML = data.recent_runs.map(r => `<tr>
+    <td class="mono">${esc(r.connector)}</td>
+    <td class="mono">${esc(r.team_id)}</td>
+    <td>${badge(r.status)}</td>
+    <td>${r.documents_processed}</td>
+    <td>${r.chunks_upserted}</td>
+    <td>${timeAgo(r.started_at)}</td>
+  </tr>`).join('') || '<tr><td colspan="6" class="empty">No sync_runs recorded — sync scripts don\'t log to sync_runs yet except confluence_ingest.py</td></tr>';
+}
+
+function renderMessages(data) {
+  const rows = document.getElementById('message-rows');
+  rows.innerHTML = data.recent_messages.map(m => `<tr>
+    <td class="mono">${esc(m.team_id)}</td>
+    <td class="mono">${esc(m.route)}</td>
+    <td>${m.confidence ?? '–'}</td>
+    <td title="${esc(m.answer_preview)}">${esc(m.answer_preview)}</td>
+    <td>${timeAgo(m.created_at)}</td>
+  </tr>`).join('') || '<tr><td colspan="5" class="empty">No chat messages yet — try POST /ai/chat</td></tr>';
+}
+
+function renderAudit(data) {
+  document.getElementById('denied-count').textContent = data.denied_count;
+  const rows = document.getElementById('audit-rows');
+  rows.innerHTML = data.recent.map(a => `<tr>
+    <td class="mono">${esc(a.actor)}</td>
+    <td>${a.action && a.action.endsWith('_denied') ? badge('denied') : esc(a.action)}</td>
+    <td class="mono">${esc(a.team_id)}</td>
+    <td>${timeAgo(a.created_at)}</td>
+  </tr>`).join('') || '<tr><td colspan="4" class="empty">No audit_log entries yet</td></tr>';
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/admin/stats');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    renderRouteBars(data.routing.distribution);
+    renderEvalTable(data.eval_comparison);
+    renderReview(data.review_queue);
+    renderSync(data.sync_pipeline);
+    renderMessages(data.routing);
+    renderAudit(data.audit);
+    statusEl.textContent = 'updated ' + new Date().toLocaleTimeString();
+    statusEl.classList.remove('error');
+  } catch (e) {
+    statusEl.textContent = 'error: ' + e.message;
+    statusEl.classList.add('error');
+  }
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>
