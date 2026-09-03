@@ -87,3 +87,9 @@ jobs:
 
       - name: RBAC / tenant-isolation (leakage) suite
         run: python test/test_rbac_leakage.py
+
+      - name: Pytest suite — leakage, confidence, token savings, security (TC-1.x through TC-5.x)
+        # test_graphdb_vs_vector.py (TC-2.x) skips itself here — no neo4j service is stood up
+        # in CI for what's a manual/local decision-support comparison (ARCHITECTURE.md §5 phase
+        # 11 build-order note), not a permanent CI gate. Run it locally with neo4j-test up.
+        run: pytest tests/ -v

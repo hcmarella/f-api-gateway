@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.agents.graph import run_question
+from app.audit import log_action
 from app.config import settings
 
 router = APIRouter(prefix="/ai", tags=["chat"])
@@ -71,6 +72,22 @@ def chat(body: ChatRequest):
                         source.get("score"),
                     ),
                 )
+
+            log_action(
+                conn,
+                team_id=body.team_id,
+                actor=body.user_email,
+                action="chat",
+                target=result.get("route"),
+                details={
+                    "question": body.question,
+                    "persona": body.persona,
+                    "route": result.get("route"),
+                    "gate_passed": result.get("gate_passed"),
+                    "score": result.get("score"),
+                    "sources": result.get("sources", []),
+                },
+            )
         conn.commit()
 
     return ChatResponse(

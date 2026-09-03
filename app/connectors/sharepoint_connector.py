@@ -50,13 +50,22 @@ def _get_delegated_token(user_email: str) -> str:
     return f"mock-delegated-token-for-{user_email}"
 
 
+def _redact_token(token: str) -> str:
+    """Never log a bearer token's actual value — only enough to confirm one
+    was present, so this is safe even once delegated_token is a real MSAL
+    token rather than a mock string."""
+    if len(token) <= 8:
+        return "***"
+    return f"{token[:4]}...{token[-4:]} (len={len(token)})"
+
+
 def _call_sharepoint_api(query: str, delegated_token: str) -> list[dict]:
     """Stand-in for a Microsoft Graph `/search/query` call using the
     delegated token, so results are scoped to what that specific user is
     permitted to see in SharePoint."""
     logger.info(
-        "sharepoint_connector: calling live SharePoint search (tenant=%s) with delegated_token=%r query=%r",
-        SHAREPOINT_TENANT, delegated_token, query,
+        "sharepoint_connector: calling live SharePoint search (tenant=%s) with delegated_token=%s query=%r",
+        SHAREPOINT_TENANT, _redact_token(delegated_token), query,
     )
     time.sleep(0.05)
     query_lower = query.lower()

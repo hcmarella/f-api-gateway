@@ -13,6 +13,7 @@ import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.audit import log_action
 from app.config import settings
 
 router = APIRouter(prefix="/admin/review-queue", tags=["admin"])
@@ -27,15 +28,35 @@ GIT_ENV = {
     "GIT_COMMITTER_EMAIL": "forge-review-bot@local",
 }
 
+# No real auth system exists yet (see docs/BUILD_SUMMARY.md — Okta/AD is not
+# wired up); `role` is trusted straight from the request body, same trust
+# model as team_id/persona/user_email elsewhere in this codebase. This is a
+# stopgap, not real authorization — it stops an *accidental* wrong-role call
+# from a well-behaved caller (e.g. the UI), not a malicious one that can
+# simply lie about its role. Real authorization needs Phase 7.
+ADMIN_ROLES = {"admin", "super_user"}
+
 
 class ApproveSkillRequest(BaseModel):
     edited_content: str | None = None
     reviewer: str | None = None
+    role: str | None = None
 
 
 class RejectRequest(BaseModel):
     reviewer: str | None = None
     reason: str | None = None
+    role: str | None = None
+
+
+def _require_admin_role(conn, team_id: str | None, actor: str | None, role: str | None, action: str, target: str):
+    if role not in ADMIN_ROLES:
+        log_action(
+            conn, team_id, actor, f"{action}_denied", target,
+            {"reason": "role not in ADMIN_ROLES", "role": role},
+        )
+        conn.commit()
+        raise HTTPException(status_code=403, detail=f"role {role!r} is not permitted to {action} (requires one of {sorted(ADMIN_ROLES)})")
 
 
 def _parse_skill_frontmatter(content: str) -> dict:
@@ -105,7 +126,9 @@ def approve_skill(review_id: str, body: ApproveSkillRequest):
     with psycopg.connect(settings.postgres_dsn) as conn:
         with conn.cursor() as cur:
             row = _fetch_queue_row(cur, review_id)
+        _require_admin_role(conn, row["team_id"], body.reviewer, body.role, "approve_skill", review_id)
 
+        with conn.cursor() as cur:
             if row["status"] != "pending":
                 raise HTTPException(status_code=409, detail=f"review entry is already '{row['status']}'")
             if row["target"] != "new_skill":
@@ -138,6 +161,10 @@ def approve_skill(review_id: str, body: ApproveSkillRequest):
                 """,
                 (body.reviewer, review_id),
             )
+            log_action(
+                conn, row["team_id"], body.reviewer, "approve_skill", review_id,
+                {"skill_id": frontmatter["id"], "commit": commit_hash, "role": body.role},
+            )
         conn.commit()
 
     return {
@@ -153,7 +180,9 @@ def reject(review_id: str, body: RejectRequest):
     with psycopg.connect(settings.postgres_dsn) as conn:
         with conn.cursor() as cur:
             row = _fetch_queue_row(cur, review_id)
+        _require_admin_role(conn, row["team_id"], body.reviewer, body.role, "reject_skill", review_id)
 
+        with conn.cursor() as cur:
             if row["status"] != "pending":
                 raise HTTPException(status_code=409, detail=f"review entry is already '{row['status']}'")
 
@@ -164,6 +193,10 @@ def reject(review_id: str, body: RejectRequest):
                 WHERE id = %s
                 """,
                 (body.reviewer, review_id),
+            )
+            log_action(
+                conn, row["team_id"], body.reviewer, "reject_skill", review_id,
+                {"reason": body.reason, "role": body.role},
             )
         conn.commit()
 

@@ -11,3 +11,4 @@ torch==2.5.1
 langgraph==0.2.62
 pyyaml==6.0.2
 neo4j==5.27.0
+pytest==8.3.4
