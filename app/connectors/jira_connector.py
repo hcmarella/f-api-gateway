@@ -71,3 +71,63 @@ def get_sprint_status(team_id: str) -> dict:
     data = _call_jira_api(team_id)
     url = f"{JIRA_BASE_URL}/jira/software/projects/{team_id}/boards/{data['board_id']}/sprints/{data['sprint_id']}"
     return {**data, "team_id": team_id, "url": url}
+
+
+# ---------------------------------------------------------------------------
+# Ticket/project-level mock data, added for app/graph/ — the host-team graph
+# test lane. Deliberately includes a cross-team project dependency
+# (host-platform -> payments-core, owned by team 'test') so
+# app/graph/queries/dependency_traversal.py has something real to traverse.
+# Mocked for the same reason as everything else here: no live Jira instance.
+# ---------------------------------------------------------------------------
+
+_MOCK_PROJECTS = {
+    "host": [
+        {"id": "host-platform", "name": "Host Platform", "depends_on_project_ids": ["payments-core"]},
+        {"id": "host-billing", "name": "Host Billing", "depends_on_project_ids": []},
+    ],
+    "test": [
+        {"id": "payments-core", "name": "Payments Core", "depends_on_project_ids": []},
+    ],
+}
+
+_MOCK_TICKETS = {
+    "host": [
+        {
+            "id": "HOST-101", "title": "Migrate auth service to new cluster", "status": "In Progress",
+            "project_id": "host-platform", "assignee_id": "alex", "assignee_name": "Alex Rivera",
+            "blocks": ["HOST-103"],
+        },
+        {
+            "id": "HOST-102", "title": "Update billing webhook signature verification", "status": "Blocked",
+            "project_id": "host-billing", "assignee_id": "jordan", "assignee_name": "Jordan Lee",
+            "blocks": [],
+        },
+        {
+            "id": "HOST-103", "title": "Add retry logic to payments-core integration", "status": "To Do",
+            "project_id": "host-platform", "assignee_id": "alex", "assignee_name": "Alex Rivera",
+            "blocks": [],
+        },
+    ],
+    "test": [
+        {
+            "id": "PAY-55", "title": "Rotate payments-core signing keys", "status": "In Progress",
+            "project_id": "payments-core", "assignee_id": "sam", "assignee_name": "Sam Osei",
+            "blocks": [],
+        },
+    ],
+}
+
+
+def get_projects(team_id: str) -> list[dict]:
+    """Stand-in for GET {JIRA_BASE_URL}/rest/api/2/project?... Mocked, same
+    as everything else in this file."""
+    logger.info("jira_connector: calling live Jira API for team_id=%r (list projects)", team_id)
+    return _MOCK_PROJECTS.get(team_id, [])
+
+
+def get_all_tickets(team_id: str) -> list[dict]:
+    """Stand-in for GET {JIRA_BASE_URL}/rest/api/2/search?jql=project in (...).
+    Mocked, same as everything else in this file."""
+    logger.info("jira_connector: calling live Jira API for team_id=%r (list tickets)", team_id)
+    return _MOCK_TICKETS.get(team_id, [])

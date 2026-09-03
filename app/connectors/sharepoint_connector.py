@@ -85,3 +85,34 @@ def search_documents(query: str, user_email: str) -> list[dict]:
         }
         for doc in results
     ]
+
+
+# ---------------------------------------------------------------------------
+# Bulk team-file listing, added for app/graph/ — the host-team graph test
+# lane. Distinct from search_documents(): ingestion needs a full drive
+# listing for a team, not a per-query delegated search — a different real
+# Graph API call (drive/list vs /search/query), not just a code-organization
+# choice. Uses app-level auth like Jira, not delegated OAuth, since a sync
+# job runs as a service, not on behalf of one specific interactive user.
+# ---------------------------------------------------------------------------
+
+_MOCK_TEAM_FILES = {
+    "host": [
+        {
+            "item_id": "H001",
+            "drive": "Shared Documents",
+            "title": "Host Platform Migration Runbook.docx",
+            "project_id": "host-platform",
+            "path": "/sites/HostPlatform/Shared Documents/Migration Runbook.docx",
+        },
+    ],
+}
+
+
+def list_files_for_team(team_id: str) -> list[dict]:
+    """Stand-in for a Microsoft Graph `/drives/{id}/root/children` (or
+    similar app-level listing) call, scoped to a team's known site/drive.
+    Mocked, same as everything else in this file."""
+    logger.info("sharepoint_connector: calling live SharePoint API for team_id=%r (list team files)", team_id)
+    files = _MOCK_TEAM_FILES.get(team_id, [])
+    return [{**f, "url": f"https://{SHAREPOINT_TENANT}{f['path']}"} for f in files]

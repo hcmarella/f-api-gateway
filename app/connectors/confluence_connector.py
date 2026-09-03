@@ -11,6 +11,7 @@ public interface (`list_pages`) is what callers depend on.
 
 import logging
 import os
+import re
 import time
 
 logger = logging.getLogger("connectors.confluence")
@@ -54,7 +55,37 @@ _MOCK_PAGES = {
             ),
         },
     ],
+    # Added for app/graph/ — the host-team graph test lane. References
+    # HOST-101 deliberately, so confluence_to_graph.py's Document-REFERENCES
+    # ->Ticket link has something real to find.
+    "host": [
+        {
+            "page_id": "20001",
+            "space_key": "HOST",
+            "title": "Auth Service Migration Plan",
+            "body": (
+                "# Auth Service Migration Plan\n\n"
+                "This page tracks HOST-101, the migration of the auth "
+                "service to the new cluster. Rollout is staged behind a "
+                "feature flag; see HOST-103 for the follow-up retry-logic "
+                "work once the migration lands."
+            ),
+        },
+    ],
 }
+
+# Matches Jira-style ticket keys, e.g. HOST-101, PAY-55 — real logic, not
+# mocked, used to link a Confluence page to the tickets it mentions.
+_TICKET_REFERENCE_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d+\b")
+
+
+def extract_ticket_references(content: str) -> list[str]:
+    """Real (non-mocked) regex extraction of ticket keys mentioned in a
+    page's body. Order-preserving, de-duplicated."""
+    seen: dict[str, None] = {}
+    for match in _TICKET_REFERENCE_PATTERN.findall(content):
+        seen.setdefault(match, None)
+    return list(seen.keys())
 
 
 def _call_confluence_api(team_id: str) -> list[dict]:
