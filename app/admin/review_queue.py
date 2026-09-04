@@ -100,7 +100,7 @@ def list_pending(team_id: str = "test"):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, team_id, target, proposed_content, status
+                SELECT id, team_id, target, proposed_content, status, submitted_by
                 FROM content_review_queue
                 WHERE status = 'pending' AND team_id = %s
                 ORDER BY created_at
@@ -116,6 +116,7 @@ def list_pending(team_id: str = "test"):
             "target": row[2],
             "proposed_content": row[3],
             "status": row[4],
+            "submitted_by": row[5],
         }
         for row in rows
     ]

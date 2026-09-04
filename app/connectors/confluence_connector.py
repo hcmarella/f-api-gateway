@@ -13,19 +13,26 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("connectors.confluence")
 
 CONFLUENCE_BASE_URL = os.environ.get("CONFLUENCE_BASE_URL", "https://mock-confluence.example.atlassian.net/wiki")
 
+_NOW = datetime.now(timezone.utc)
+
 # Mocked page content per team, standing in for a real Confluence space
-# export until credentials are available.
+# export until credentials are available. last_modified is real data feeding
+# the Freshness signal (knowledge_chunks.source_updated_at) — one page is
+# deliberately backdated so the freshness penalty in rag_node has something
+# real to demonstrate against, not just a column nobody exercises.
 _MOCK_PAGES = {
     "test": [
         {
             "page_id": "10001",
             "space_key": "ENG",
             "title": "Disaster Recovery Plan",
+            "last_modified": _NOW - timedelta(days=20),
             "body": (
                 "# Disaster Recovery Plan\n\n"
                 "In the event of a full regional outage, failover to the "
@@ -44,6 +51,7 @@ _MOCK_PAGES = {
             "page_id": "10002",
             "space_key": "ENG",
             "title": "Vendor Security Review Process",
+            "last_modified": _NOW - timedelta(days=500),  # deliberately stale
             "body": (
                 "# Vendor Security Review Process\n\n"
                 "Any third-party vendor that will process customer data "
@@ -63,6 +71,7 @@ _MOCK_PAGES = {
             "page_id": "20001",
             "space_key": "HOST",
             "title": "Auth Service Migration Plan",
+            "last_modified": _NOW - timedelta(days=5),
             "body": (
                 "# Auth Service Migration Plan\n\n"
                 "This page tracks HOST-101, the migration of the auth "

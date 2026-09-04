@@ -107,6 +107,60 @@ Confluence is still embed-only. Found real gaps elsewhere instead:
   check that it belongs to the caller's team — a guessed/reused UUID from
   another team could be written into. Same root cause as the point above.
 
+## 2026-09-04, second addition: memory-model migration (reconciled, not replaced)
+
+User provided a detailed "Memory Data Model — Final" spec, "ready to apply
+as a migration." Applied it as a deliberate **reconciliation**, not a
+literal transcription — `db/migrations/V2__memory_model.sql`. The spec's
+raw CREATE TABLE statements assumed a fresh database; this one has real,
+tested, working code against the existing shapes, so several proposed
+changes were intentionally not applied as-is:
+
+- **Applied for real, end-to-end**: `knowledge_chunks.source_updated_at`
+  now feeds an actual freshness penalty in `rag_node`
+  (`_freshness_factor`, `app/agents/graph.py`) — gentle by design (no
+  penalty within 90 days, max 15% penalty by 400+ days), verified with a
+  controlled pair (identical content, only freshness differs: 0.6812 raw
+  both, 0.5791 adjusted for the 400-day-old one). This closes what was
+  previously a documented, `xfail`'d gap
+  (`tests/test_confidence.py::test_tc3_3_stale_source_confidence_penalty`
+  now genuinely passes, not skipped or faked). `local_md_ingest.py` uses
+  real file mtime; `confluence_ingest.py` uses the mock connector's
+  `last_modified` field (one page deliberately backdated 500 days for
+  real, demonstrable test coverage).
+- **Applied schema-only, honestly labeled "not wired up"**: `persona_index`
+  and `access_control` were both confirmed dead (zero reads/writes
+  anywhere) before being replaced with the spec's shape — zero migration
+  risk, but still unpopulated after this change. `messages.retry_count` /
+  `retrieval_engine_used` / `gates_fired` and `skill_gap_log.occurred_count`
+  / `user_role` are schema-ready but `app/api/chat.py` doesn't populate
+  them yet — real follow-on work, not done here, not claimed as done.
+- **Deliberately NOT applied**: the spec's `message_sources` shape
+  `(message_id, document_id, chunk_id, relevance_score)` would drop the
+  ability to cite Jira/SharePoint/skill sources — the app actively does
+  this today via `source_type`/`source_ref`/`title`/`url`, which have no
+  `document_id`/`chunk_id` at all for those source types. Adopting it
+  verbatim would be a real regression. Also skipped: `content_review_queue`
+  column renames (`id`→`review_id` etc. — the API already returns
+  `review_id` in JSON, so the external contract already holds; renaming
+  the column buys nothing), `skill_gap_log` dropping its
+  `review_queue_id`/`conversation_id` FKs (actively useful, more so than
+  the proposed `occurred_count`-only replacement), `documents.document_id`
+  UUID→TEXT (would break the FK chain and `gen_random_uuid()`-based
+  inserts for no functional gain), and `messages` monthly partitioning
+  (premature at current data volume).
+- **Live conflict, resolved**: another concurrent session independently
+  wrote and applied its *own* version of this same migration file mid-edit
+  — genuinely different content (added `documents.repo_or_space`/
+  `commit_sha`, `content_review_queue.submitted_by`; didn't include the
+  `messages.*`/`skill_gap_log.*` additions). Reconciled by applying both
+  sets of changes (verified additive/non-overlapping except
+  `source_updated_at`, which both sessions added identically), then
+  rewriting the migration file and `db/schema.sql` to describe the actual
+  merged end state consistently — verified by running `schema.sql` alone
+  against a genuinely fresh database and diffing its output against the
+  live migrated database's columns; they now match exactly.
+
 ## What's solid
 
 Everything marked "Done" above has a real, re-runnable test behind it:

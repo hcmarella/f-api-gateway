@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
@@ -62,18 +63,18 @@ def upsert_document(conn, team_id: str, source_ref: str, title: str, checksum: s
         return cur.fetchone()[0]
 
 
-def upsert_chunk(conn, chunk_id: str, team_id: str, document_id: str, content: str, embedding: list[float], chunk_index: int, token_count: int):
+def upsert_chunk(conn, chunk_id: str, team_id: str, document_id: str, content: str, embedding: list[float], chunk_index: int, token_count: int, source_updated_at: datetime | None = None):
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO knowledge_chunks (chunk_id, team_id, document_id, content, embedding, chunk_index, token_count)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO knowledge_chunks (chunk_id, team_id, document_id, content, embedding, chunk_index, token_count, source_updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))
             ON CONFLICT (chunk_id)
             DO UPDATE SET content = EXCLUDED.content, embedding = EXCLUDED.embedding,
                           document_id = EXCLUDED.document_id, chunk_index = EXCLUDED.chunk_index,
-                          token_count = EXCLUDED.token_count
+                          token_count = EXCLUDED.token_count, source_updated_at = EXCLUDED.source_updated_at
             """,
-            (chunk_id, team_id, document_id, content, embedding, chunk_index, token_count),
+            (chunk_id, team_id, document_id, content, embedding, chunk_index, token_count, source_updated_at),
         )
 
 
@@ -96,6 +97,8 @@ def ingest(knowledge_dir: Path, team_id: str) -> int:
             checksum = hashlib.sha256(text.encode()).hexdigest()
             source_ref = str(path.relative_to(knowledge_dir.parent))
             title = path.stem.replace("-", " ").title()
+            # Real filesystem mtime — the Freshness signal, not a placeholder.
+            source_updated_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
             document_id = upsert_document(conn, team_id, source_ref, title, checksum)
 
@@ -108,7 +111,7 @@ def ingest(knowledge_dir: Path, team_id: str) -> int:
             for i, (chunk_content, embedding) in enumerate(zip(chunks, embeddings)):
                 chunk_id = make_chunk_id(team_id, source_ref, i)
                 token_count = len(approx_tokenize(chunk_content))
-                upsert_chunk(conn, chunk_id, team_id, document_id, chunk_content, embedding, i, token_count)
+                upsert_chunk(conn, chunk_id, team_id, document_id, chunk_content, embedding, i, token_count, source_updated_at)
                 total_chunks += 1
 
             conn.commit()

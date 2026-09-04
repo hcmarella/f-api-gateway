@@ -53,7 +53,10 @@ def ingest(team_id: str) -> int:
                 for i, (chunk_content, embedding) in enumerate(zip(chunks, embeddings)):
                     chunk_id = make_chunk_id(team_id, source_ref, i)
                     token_count = len(chunk_content.split())
-                    upsert_chunk(conn, chunk_id, team_id, document_id, chunk_content, embedding, i, token_count)
+                    upsert_chunk(
+                        conn, chunk_id, team_id, document_id, chunk_content, embedding, i, token_count,
+                        source_updated_at=page.get("last_modified"),
+                    )
                     total_chunks += 1
 
                 conn.commit()

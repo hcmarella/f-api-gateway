@@ -14,6 +14,7 @@ placeholder string — see app/config.py and the README's Quickstart).
 """
 
 import re
+from datetime import datetime, timezone
 from typing import Literal, TypedDict
 
 from anthropic import Anthropic
@@ -33,6 +34,25 @@ ROUTE_LIVE_DATA_NODE = "live_data_node"
 
 RAG_TOP_K = 3
 RAG_CONFIDENCE_THRESHOLD = 0.55  # calibrated against test/test_rag_retrieval.py
+
+# Freshness gate signal (db/migrations/V2__memory_model.sql added
+# knowledge_chunks.source_updated_at). Deliberately gentle: content within
+# the grace period is never penalized, and the max penalty at very old ages
+# is small — this nudges ranking between similarly-relevant chunks, it
+# doesn't bury old-but-still-correct content behind a cliff.
+FRESHNESS_GRACE_DAYS = 90
+FRESHNESS_MAX_PENALTY = 0.15
+FRESHNESS_DECAY_WINDOW_DAYS = 310  # reaches the max penalty at 90+310=400 days old
+
+
+def _freshness_factor(source_updated_at: datetime | None) -> float:
+    if source_updated_at is None:
+        return 1.0
+    age_days = (datetime.now(timezone.utc) - source_updated_at).days
+    if age_days <= FRESHNESS_GRACE_DAYS:
+        return 1.0
+    decay_days = min(age_days - FRESHNESS_GRACE_DAYS, FRESHNESS_DECAY_WINDOW_DAYS)
+    return 1.0 - (decay_days / FRESHNESS_DECAY_WINDOW_DAYS) * FRESHNESS_MAX_PENALTY
 
 # Keyword heuristics standing in for a real Haiku-style intent classifier.
 _LIVE_DATA_PATTERNS = [
@@ -108,7 +128,9 @@ def skill_match(state: GraphState) -> GraphState:
 
 def rag_node(state: GraphState) -> GraphState:
     """Real pgvector similarity search against knowledge_chunks, scoped to
-    the caller's team_id."""
+    the caller's team_id, with a freshness-adjusted score (see
+    _freshness_factor) so equally-similar fresh and stale content don't
+    rank identically."""
     query_embedding = embed_query(state["question"])
 
     with psycopg.connect(settings.postgres_dsn) as conn:
@@ -116,7 +138,7 @@ def rag_node(state: GraphState) -> GraphState:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT chunk_id, content, 1 - (embedding <=> %s::vector) AS similarity
+                SELECT chunk_id, content, 1 - (embedding <=> %s::vector) AS similarity, source_updated_at
                 FROM knowledge_chunks
                 WHERE team_id = %s
                 ORDER BY embedding <=> %s::vector
@@ -126,7 +148,18 @@ def rag_node(state: GraphState) -> GraphState:
             )
             rows = cur.fetchall()
 
-    chunks = [{"chunk_id": r[0], "content": r[1], "similarity": float(r[2])} for r in rows]
+    chunks = []
+    for chunk_id, content, raw_similarity, source_updated_at in rows:
+        freshness = _freshness_factor(source_updated_at)
+        chunks.append({
+            "chunk_id": chunk_id,
+            "content": content,
+            "similarity": round(float(raw_similarity) * freshness, 6),
+            "raw_similarity": float(raw_similarity),
+            "freshness_factor": freshness,
+            "source_updated_at": source_updated_at.isoformat() if source_updated_at else None,
+        })
+    chunks.sort(key=lambda c: c["similarity"], reverse=True)
     best_score = chunks[0]["similarity"] if chunks else 0.0
 
     return {

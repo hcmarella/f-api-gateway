@@ -76,8 +76,9 @@ def draft_skill_node(state: dict) -> dict:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO content_review_queue (team_id, target, proposed_content, context, status)
-                VALUES (%s, 'new_skill', %s, %s, 'pending')
+                INSERT INTO content_review_queue
+                    (team_id, target, proposed_content, context, status, submitted_by)
+                VALUES (%s, 'new_skill', %s, %s, 'pending', 'system:draft_skill_node')
                 RETURNING id
                 """,
                 (team_id, draft_content, json.dumps({"question": question, "persona": persona})),

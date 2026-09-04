@@ -1,12 +1,15 @@
 """TC-3.x — confidence score test cases.
 
-Confidence in this build == raw pgvector cosine similarity from rag_node.
-There is no freshness weighting, no conflict detection, and no calibration
-step beyond the empirical 0.55 threshold in app/agents/graph.py — several
-test cases below exist specifically to make that visible, not to hide it.
+Confidence in this build == pgvector cosine similarity from rag_node,
+adjusted by a real freshness penalty (source_updated_at, see
+_freshness_factor in app/agents/graph.py). There is still no conflict
+detection, and no calibration step beyond the empirical 0.55 threshold —
+those test cases exist specifically to make the remaining gaps visible,
+not to hide them.
 """
 
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -82,37 +85,52 @@ def test_tc3_2_note_conflict_surfacing_not_testable():
     )
 
 
-@pytest.mark.xfail(
-    reason="No freshness weighting exists anywhere in the confidence formula — rag_node's "
-    "score is pure cosine similarity, with zero reference to documents.updated_at. This is a "
-    "real, currently-unimplemented gap (ARCHITECTURE.md's Freshness gate), not a bug in this "
-    "test.",
-    strict=True,
-)
 def test_tc3_3_stale_source_confidence_penalty(scratch_team, db_conn):
+    """knowledge_chunks.source_updated_at (db/migrations/V2__memory_model.sql)
+    now feeds a real freshness penalty in rag_node (app/agents/graph.py:
+    _freshness_factor) — this closes what used to be a documented,
+    xfail'd gap. Proven with a controlled pair: identical content, only
+    source_updated_at differs, so any score difference is attributable to
+    freshness alone, not to a coincidentally-better semantic match."""
     text = "The deployment pipeline runs on Jenkins and deploys every commit to main automatically."
-    source_ref = "tc3-3-stale"
-    document_id = upsert_document(db_conn, scratch_team, source_ref, "Stale doc", "n/a")
+
+    fresh_ref = "tc3-3-fresh"
+    fresh_doc_id = upsert_document(db_conn, scratch_team, fresh_ref, "Fresh twin", "n/a")
+    stale_ref = "tc3-3-stale"
+    stale_doc_id = upsert_document(db_conn, scratch_team, stale_ref, "Stale twin", "n/a")
+
     chunks = chunk_text(text)
     embeddings = embed_texts(chunks)
-    chunk_id = make_chunk_id(scratch_team, source_ref, 0)
-    upsert_chunk(db_conn, chunk_id, scratch_team, document_id, chunks[0], embeddings[0], 0, len(chunks[0].split()))
-    with db_conn.cursor() as cur:
-        cur.execute("UPDATE documents SET updated_at = now() - interval '400 days' WHERE document_id = %s", (document_id,))
+
+    fresh_chunk_id = make_chunk_id(scratch_team, fresh_ref, 0)
+    upsert_chunk(
+        db_conn, fresh_chunk_id, scratch_team, fresh_doc_id, chunks[0], embeddings[0], 0, len(chunks[0].split()),
+        source_updated_at=datetime.now(timezone.utc) - timedelta(days=10),
+    )
+    stale_chunk_id = make_chunk_id(scratch_team, stale_ref, 0)
+    upsert_chunk(
+        db_conn, stale_chunk_id, scratch_team, stale_doc_id, chunks[0], embeddings[0], 0, len(chunks[0].split()),
+        source_updated_at=datetime.now(timezone.utc) - timedelta(days=400),
+    )
     db_conn.commit()
 
-    fresh_score_reference = rag_node({"question": "How does the deployment pipeline work?", "team_id": scratch_team})["rag_result"]["best_score"]
+    result = rag_node({"question": "How does the deployment pipeline work?", "team_id": scratch_team})["rag_result"]
+    by_id = {c["chunk_id"]: c for c in result["chunks"]}
+    fresh_c, stale_c = by_id[fresh_chunk_id], by_id[stale_chunk_id]
 
-    # There's nothing to compare against — a "fresh" twin of this doc doesn't
-    # exist, so the real assertion is simply: does the score reflect the
-    # 400-day-old updated_at at all? It never does, by construction of the
-    # current formula.
-    with db_conn.cursor() as cur:
-        cur.execute("SELECT updated_at FROM documents WHERE document_id = %s", (document_id,))
-        updated_at = cur.fetchone()[0]
+    print(f"\nfresh: raw={fresh_c['raw_similarity']:.4f} adjusted={fresh_c['similarity']:.4f} freshness={fresh_c['freshness_factor']:.4f}")
+    print(f"stale: raw={stale_c['raw_similarity']:.4f} adjusted={stale_c['similarity']:.4f} freshness={stale_c['freshness_factor']:.4f}")
 
-    print(f"\ndocument updated_at={updated_at}, confidence={fresh_score_reference:.4f} — no penalty applied")
-    assert False, "no freshness penalty logic exists to assert against — confidence is pure cosine similarity"
+    assert fresh_c["raw_similarity"] == pytest.approx(stale_c["raw_similarity"], abs=1e-6), (
+        "identical content should embed identically — raw similarity should match; "
+        "if it doesn't, this test's premise (isolating freshness as the only variable) is broken"
+    )
+    assert fresh_c["freshness_factor"] == 1.0, "10-day-old content is within the grace period, should have zero penalty"
+    assert stale_c["freshness_factor"] < 1.0, "400-day-old content should have a real freshness penalty applied"
+    assert stale_c["similarity"] < fresh_c["similarity"], (
+        "stale content scored the same as or higher than its identical fresh twin — "
+        "the freshness penalty isn't actually affecting ranking"
+    )
 
 
 def test_tc3_4_zero_match_says_unverified():
