@@ -7,15 +7,16 @@ Flow:
     (skill_match <-> rag_node) is tried as a second pass -> if neither
     confidently matches, draft_skill fires -> synthesize -> gates -> eval_score
 
-triage is a mocked Haiku-style classifier (rule-based stand-in — swap for a
-real model call later). synthesize returns a fixed mock string for now
-(replaced with a real model call in a later step). live_data_node is a stub
-until the Jira/SharePoint connectors are wired in.
+triage is still a mocked Haiku-style classifier (rule-based stand-in — swap
+for a real model call later). synthesize() calls real Claude when
+LLM_MODE=real and ANTHROPIC_API_KEY is set (default: LLM_MODE=mock, a fixed
+placeholder string — see app/config.py and the README's Quickstart).
 """
 
 import re
 from typing import Literal, TypedDict
 
+from anthropic import Anthropic
 import psycopg
 from langgraph.graph import END, StateGraph
 from pgvector.psycopg import register_vector
@@ -204,10 +205,7 @@ def draft_skill(state: GraphState) -> GraphState:
 
 
 def synthesize(state: GraphState) -> GraphState:
-    """Answer text is still a fixed mock string (no model credential wired
-    up yet) but source attribution is real: it reflects whichever branch
-    actually matched, so message_sources/citations are accurate even before
-    the real model call lands."""
+    """Generate an answer from the matched branch and preserve source attribution."""
     sources: list = []
 
     live_result = state.get("live_data_result") or {}
@@ -224,8 +222,47 @@ def synthesize(state: GraphState) -> GraphState:
     elif skill_result.get("matched"):
         sources = [{"source_type": "skill", "source_ref": skill_result["skill_id"]}]
 
+    if settings.llm_mode.lower() == "real":
+        if not settings.anthropic_api_key:
+            raise RuntimeError("LLM_MODE=real requires ANTHROPIC_API_KEY")
+
+        context_parts = []
+        if rag_result.get("matched"):
+            context_parts.extend(
+                f"Source {chunk['chunk_id']}:\n{chunk['content']}"
+                for chunk in rag_result.get("chunks", [])
+            )
+        if live_result.get("matched"):
+            context_parts.append(f"Live data:\n{live_result.get('data')}")
+        if skill_result.get("matched"):
+            context_parts.append(f"Skill metadata:\n{skill_result}")
+
+        context = "\n\n".join(context_parts)
+        client = Anthropic(api_key=settings.anthropic_api_key)
+        response = client.messages.create(
+            model=settings.claude_model,
+            max_tokens=settings.claude_max_tokens,
+            system=(
+                "You are Forge, an internal company assistant. Answer only from the "
+                "provided context. If the context does not support an answer, say so "
+                "clearly. Do not invent policies, dates, names, or links."
+            ),
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Question:\n{state['question']}\n\n"
+                        f"Context:\n{context}"
+                    ),
+                }
+            ],
+        )
+        answer = "".join(block.text for block in response.content if block.type == "text").strip()
+    else:
+        answer = "[MOCK ANSWER] This is a placeholder response from synthesize()."
+
     return {
-        "answer": "[MOCK ANSWER] This is a placeholder response from synthesize().",
+        "answer": answer,
         "sources": sources,
     }
 

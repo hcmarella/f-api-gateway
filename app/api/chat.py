@@ -1,8 +1,6 @@
 """POST /ai/chat — runs a question through the agent graph and persists the
 conversation turn, including source attribution, to Postgres."""
 
-import json
-
 import psycopg
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -32,10 +30,11 @@ class ChatResponse(BaseModel):
     message_id: str
 
 
-@router.post("/chat", response_model=ChatResponse)
-def chat(body: ChatRequest):
-    result = run_question(body.question, team_id=body.team_id, persona=body.persona, user_email=body.user_email)
-
+def persist_and_build_response(body: ChatRequest, result: dict, action: str = "chat") -> ChatResponse:
+    """Shared by POST /ai/chat and POST /ai/chat/stream so both endpoints
+    persist and shape the final response identically — the streaming
+    endpoint only adds progress events on top of this, it doesn't get its
+    own copy of the persistence logic to drift out of sync."""
     with psycopg.connect(settings.postgres_dsn) as conn:
         with conn.cursor() as cur:
             if body.conversation_id:
@@ -77,7 +76,7 @@ def chat(body: ChatRequest):
                 conn,
                 team_id=body.team_id,
                 actor=body.user_email,
-                action="chat",
+                action=action,
                 target=result.get("route"),
                 details={
                     "question": body.question,
@@ -99,3 +98,9 @@ def chat(body: ChatRequest):
         conversation_id=conversation_id,
         message_id=message_id,
     )
+
+
+@router.post("/chat", response_model=ChatResponse)
+def chat(body: ChatRequest):
+    result = run_question(body.question, team_id=body.team_id, persona=body.persona, user_email=body.user_email)
+    return persist_and_build_response(body, result)

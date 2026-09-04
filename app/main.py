@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from app.admin.review_queue import router as review_queue_router
 from app.admin.stats import router as stats_router
 from app.api.chat import router as chat_router
+from app.api.chat_stream import router as chat_stream_router
 from app.config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -19,6 +20,7 @@ app = FastAPI(title="forge-api-gateway")
 app.include_router(review_queue_router)
 app.include_router(stats_router)
 app.include_router(chat_router)
+app.include_router(chat_stream_router)
 
 
 @app.get("/dashboard")

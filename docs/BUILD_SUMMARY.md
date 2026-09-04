@@ -17,7 +17,7 @@ alone.
 | 2 | `/ai/chat` with mock Intent Router + mock Source Router + mock citations | **Done** | `triage()` is a rule-based mock; `skill_match`/`rag_node` are real, not mocked, as of phase 4 below. |
 | 3 | UI renders sources/actions/type from the mock | **Done (sources only — no `actions`/`type` fields exist)** | UI renders `sources`; there's no `actions` array or `type` discriminator in the real contract, so that part of the UI (if built for it) has nothing to render. |
 | 4 | pgvector + embeddings, tested against 10-20 real files | **Done** | 13 real markdown files, BGE-base-en-v1.5, 768-dim, cosine thresholds calibrated with real numbers (paraphrase >0.85, unrelated <0.4). |
-| 5 | Real Bedrock call replaces the mock synthesis | **NOT done — blocked** | No AWS/Bedrock credentials or ANTHROPIC_API_KEY in this environment. `synthesize()` in `app/agents/graph.py` still returns a fixed mock string. User explicitly chose to defer this rather than have it faked. |
+| 5 | Real model call replaces the mock synthesis | **Done, via Anthropic direct (not Bedrock)** | `synthesize()` calls real Claude when `LLM_MODE=real` and `ANTHROPIC_API_KEY` is set (defaults to `LLM_MODE=mock`, the original placeholder string, when unset — see README Quickstart). No credential is present in this environment by default, so this stays mock unless explicitly configured. Bedrock itself (vs. calling Anthropic's API directly) was never wired up — same model provider, different transport; revisit if Bedrock specifically is required (IAM/IRSA per ARCHITECTURE.md §7). |
 | 6 | Skills registry (SKILL.md discovery) | **Done** | `app/agents/skill_match.py`, persona-filtered, YAML frontmatter, real test coverage both directions (business/developer). |
 | 7 | Okta/AD authorization + permission-filtered retrieval | **NOT done** | The gateway trusts `team_id`/`persona`/`user_email` straight from the request body. The UI's BFF sends stub identity headers (`X-Forge-User-Id: stub-user`) that the gateway doesn't read. Retrieval **is** permission-filtered by `team_id`/`persona` (see the RBAC suite), but the identity feeding those fields isn't verified by anything yet — a caller can claim any team/persona it wants. |
 | 8 | Live connectors: Jira → Confluence → ServiceNow → SharePoint | **3 of 4 done** | Jira (live) and SharePoint (live, delegated OAuth) done; Confluence (embed path) done. **ServiceNow was never built** — not in the original 12-step task either; it only appears in ARCHITECTURE.md. All three built connectors mock the actual HTTP call (no live credentials available) but the interface/dispatch logic is real and tested. |
@@ -65,6 +65,47 @@ credential — it's just not built yet.
 - **`ARCHITECTURE.md` itself only lives in the UI repo**, despite its own
   header instructing it to live in both, as `docs/ARCHITECTURE.md`. Not yet
   copied here.
+
+## 2026-09-04 addition: SSE streaming + memory-model audit
+
+Added `POST /ai/chat/stream` (`app/api/chat_stream.py`) — narrates the same
+compiled LangGraph via `.stream(stream_mode="updates")` rather than a
+hand-rolled linear re-implementation, so it can't silently skip the real
+cascading fallback (skill_match ↔ rag_node retry, draft_skill). Verified
+with real curl output across three branches: skill_match, rag_node, and the
+full cascading-fallback-to-draft_skill path (confirmed `synthesize` is
+correctly absent from that last stream, matching the real
+`draft_skill -> gates` edge).
+
+Audited the memory decision table (skills=native files /
+Confluence+GitHub-memory=pgvector / Jira+ServiceNow+SharePoint=live /
+multi-hop=GraphDB test lane / conversations+audit_log+review_queue=Postgres)
+against actual code, as requested. The two connectors specifically flagged
+as most likely to have drifted — `sharepoint_connector.py` and
+`confluence_connector.py` — have **not** drifted: SharePoint is still
+live-only (never embedded; `app/graph/ingestion/sharepoint_to_graph.py`
+stores lightweight relationship metadata in Neo4j, not full document
+content for retrieval, so it doesn't count as embedding it either), and
+Confluence is still embed-only. Found real gaps elsewhere instead:
+
+- **`persona_index` table is entirely unused** — zero reads or writes
+  anywhere in the codebase. Schema exists, nothing populates or queries it.
+- **No GitHub-memory delta-sync pipeline exists.** `local_md_ingest.py` can
+  serve this role but does a full-folder re-ingest each run (safe, since
+  upserts are idempotent) — there's no git-diff-since-last-run, webhook, or
+  scheduled trigger as the "Growth handling" design describes.
+- **`GET /admin/stats` has zero tenant or role scoping** — it returns
+  audit_log/review-queue/sync data across *every* team unconditionally,
+  contradicting "team admin sees only their own team." Deliberately **not**
+  papered over with a role query param: every other gate in this codebase
+  that isn't backed by a real credential (the review-queue role check
+  included) is a self-reported stopgap that provides no real protection
+  against a caller willing to lie about its role — adding one here would be
+  security theater, not a fix. Real scoping needs Phase 7 (auth).
+- **`conversation_id` ownership is never checked on write.** `POST /ai/chat`
+  accepts a caller-supplied `conversation_id` and appends to it with no
+  check that it belongs to the caller's team — a guessed/reused UUID from
+  another team could be written into. Same root cause as the point above.
 
 ## What's solid
 

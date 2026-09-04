@@ -78,6 +78,11 @@ docker compose exec -T postgres psql -U forge -d forge < db/schema.sql   # < is 
 docker compose exec -T gateway python -m app.ingestion.local_md_ingest \
   --knowledge-dir knowledge/docs --team-id test
 
+# optional: use a real Claude response instead of the default mock synthesizer
+export ANTHROPIC_API_KEY=your-key
+export LLM_MODE=real
+docker compose up -d --build gateway
+
 curl -s -X POST http://localhost:8001/ai/chat -H "Content-Type: application/json" \
   -d '{"question":"What is our policy on data retention?","team_id":"test","persona":"business"}'
 ```
